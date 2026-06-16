@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import sheets_client as sc
 
 
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.1"
 APP_VERSION_DATE = "2026-06-17"
 
 # スタッフ一覧（タブ名のプレフィックス）
@@ -73,26 +73,36 @@ if not presets:
 st.subheader(f"{staff} さんの交通費（個別）")
 st.caption("「距離(km)」の数字を直接タップして書き換えられます。書き換えたら下の「保存する」を押してください。")
 
-# データフレーム化（利用者名と距離のみ表示）
-df = pd.DataFrame([
-    {"利用者": p['name'], "距離(km)": p['km']}
-    for p in presets
-])
 
-# 距離を数値型に変換（編集しやすく）
+# 距離を数値に変換（空欄は None のまま）
 def to_num(v):
     try:
-        return float(v) if v.strip() != '' else None
+        s = str(v).strip()
+        return float(s) if s != '' and s.lower() != 'none' else None
     except (ValueError, AttributeError):
         return None
 
-df["距離(km)"] = df["距離(km)"].apply(to_num)
+
+# データフレーム化（利用者名と距離のみ表示）
+df = pd.DataFrame([
+    {"利用者": p['name'], "距離(km)": to_num(p['km'])}
+    for p in presets
+])
+
+# 距離(km)列を、空欄を許容できる数値型(Float64)にする
+# → これで None が "None" 文字列にならず、空セルとして表示される
+df["距離(km)"] = df["距離(km)"].astype("Float64")
+
+
+# data_editor の編集状態をスタッフごとに保持するためのキー
+# （スタッフを切り替えたら別の編集状態にする）
+editor_key = f"editor_{tab_name}"
 
 # 編集可能なテーブル
 edited_df = st.data_editor(
     df,
     hide_index=True,
-    use_container_width=True,
+    width="stretch",
     column_config={
         "利用者": st.column_config.TextColumn(
             "利用者",
@@ -106,13 +116,13 @@ edited_df = st.data_editor(
             format="%.1f",
         ),
     },
-    key="editor",
+    key=editor_key,
 )
 
 
 # ===== 保存ボタン =====
 st.write("")
-if st.button("💾 保存する", type="primary", use_container_width=True):
+if st.button("💾 保存する", type="primary", width="stretch"):
     # 編集後のデータを updates 形式に変換
     updates = []
     for _, row in edited_df.iterrows():
@@ -121,6 +131,7 @@ if st.button("💾 保存する", type="primary", use_container_width=True):
         if km_val is None or pd.isna(km_val):
             km_str = ""
         else:
+            km_val = float(km_val)
             # 整数なら整数表記、小数なら小数表記
             if km_val == int(km_val):
                 km_str = str(int(km_val))
