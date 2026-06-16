@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import sheets_client as sc
 
 
-APP_VERSION = "v1.1"
+APP_VERSION = "v1.1.1"
 APP_VERSION_DATE = "2026-06-17"
 
 # スタッフ一覧（タブ名のプレフィックス）
