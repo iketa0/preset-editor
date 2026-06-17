@@ -218,3 +218,32 @@ def update_multiple_km(spreadsheet, tab_name, updates):
     if cells_to_update:
         ws.update_cells(cells_to_update)
     return count
+def delete_individual_preset(spreadsheet, tab_name, name):
+    """個別プリセットから指定利用者の行を削除
+    Args:
+        name: 削除する利用者名（完全一致）
+    Returns:
+        (成功フラグ, メッセージ)
+    """
+    ws = spreadsheet.worksheet(tab_name)
+    values = ws.get_all_values()
+
+    name = str(name).strip()
+    if not name:
+        return (False, "利用者名が空です")
+
+    # 該当行を探す（1-indexed）
+    target_row = None
+    for idx, row in enumerate(values):
+        if idx == 0:
+            continue  # ヘッダ
+        padded = row + [''] * (4 - len(row))
+        if padded[1].strip() == name:
+            target_row = idx + 1  # gspread 1-indexed
+            break
+
+    if target_row is None:
+        return (False, f"「{name}」が見つかりませんでした")
+
+    ws.delete_rows(target_row)
+    return (True, f"「{name}」を削除しました")
