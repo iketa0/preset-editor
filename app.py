@@ -2,7 +2,7 @@
 交通費プリセット編集アプリ (従業員向け)
 
 従業員が自分の個別プリセットの距離(km)を、画面の表で直接編集して保存できる。
-新しい利用者の追加もできる。保存先は Google Sheets。
+新しい利用者の追加・削除もできる。保存先は Google Sheets。
 """
 import streamlit as st
 import pandas as pd
@@ -13,15 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 import sheets_client as sc
 
 
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 APP_VERSION_DATE = "2026-06-17"
 
-# スタッフ一覧（タブ名のプレフィックス）
 STAFF_LIST = ["武智 伸伍", "西谷 秀明"]
 
 
 def staff_to_tab(staff_name, kind):
-    """「武智 伸伍」+「個別」→「武智伸伍_個別」"""
     no_space = staff_name.replace(" ", "").replace("\u3000", "")
     return f"{no_space}_{kind}"
 
@@ -70,7 +68,6 @@ st.subheader(f"{staff} さんの交通費（個別）")
 st.caption("「距離(km)」の数字を直接タップして書き換えられます。書き換えたら下の「保存する」を押してください。")
 
 
-# 距離を数値に変換（空欄は None のまま）
 def to_num(v):
     try:
         s = str(v).strip()
@@ -140,13 +137,9 @@ if submitted:
     if not name_clean:
         st.error("利用者名を入力してください。")
     else:
-        # 距離を文字列に（整数なら整数表記）
         km_str = str(int(new_km)) if new_km == int(new_km) else str(new_km)
-
-        # 苗字マッチ衝突チェック（追加は止めない、注意のみ）
         existing_names = [p['name'] for p in presets]
         overlaps = sc.check_surname_overlap(name_clean, existing_names)
-
         try:
             ok, msg = sc.add_individual_preset(
                 spreadsheet, tab_name, name_clean, km_str, new_note.strip()
@@ -164,6 +157,35 @@ if submitted:
                 st.error(f"追加できませんでした: {msg}")
         except Exception as e:
             st.error(f"追加に失敗しました: {e}")
+
+
+# ===== 利用者の削除 =====
+st.divider()
+st.subheader("🗑️ 利用者を削除")
+st.caption("登録されている利用者を削除します。削除すると元に戻せないので、よく確認してください。")
+
+if presets:
+    name_options = [p['name'] for p in presets]
+    with st.form(f"delete_form_{tab_name}"):
+        del_name = st.selectbox("削除する利用者を選んでください", name_options)
+        del_confirm = st.checkbox("上記の利用者を削除することを確認しました")
+        del_submitted = st.form_submit_button("削除する", type="secondary")
+
+    if del_submitted:
+        if not del_confirm:
+            st.error("削除するには、確認のチェックを入れてください。")
+        else:
+            try:
+                ok, msg = sc.delete_individual_preset(spreadsheet, tab_name, del_name)
+                if ok:
+                    st.success(f"✅ {msg}")
+                    st.caption("上の表を最新にするには、ページを再読み込みしてください。")
+                else:
+                    st.error(f"削除できませんでした: {msg}")
+            except Exception as e:
+                st.error(f"削除に失敗しました: {e}")
+else:
+    st.caption("（削除できる利用者がいません）")
 
 
 # ===== フッター =====
