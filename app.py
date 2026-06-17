@@ -1,8 +1,9 @@
 """
 交通費プリセット編集アプリ (従業員向け)
 
-従業員が自分の個別プリセットの距離(km)を、画面の表で直接編集して保存できる。
-新しい利用者の追加・削除もできる。保存先は Google Sheets。
+個別プリセット: 距離編集・新規追加・削除
+複数プリセット: 合計距離(km)の編集のみ（案A・全列表示）
+保存先は Google Sheets。
 """
 import streamlit as st
 import pandas as pd
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import sheets_client as sc
 
 
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 APP_VERSION_DATE = "2026-06-17"
 
 STAFF_LIST = ["武智 伸伍", "西谷 秀明"]
@@ -31,7 +32,7 @@ st.set_page_config(
 )
 
 st.title("🚗 交通費プリセット編集")
-st.caption("自分の名前を選んで、利用者ごとの距離(km)を編集できます。")
+st.caption("自分の名前を選んで、交通費の距離(km)を編集できます。")
 
 
 # ===== Google Sheets 接続 =====
@@ -50,22 +51,9 @@ except Exception as e:
     st.stop()
 
 
-# ===== スタッフ選択 =====
+# ===== スタッフ選択 & モード選択 =====
 staff = st.selectbox("あなたの名前を選んでください", STAFF_LIST)
-
-tab_name = staff_to_tab(staff, "個別")
-
-
-# ===== 個別プリセット読み込み =====
-try:
-    presets = sc.read_individual_presets(spreadsheet, tab_name)
-except Exception as e:
-    st.error(f"データの読み込みに失敗しました: {e}")
-    st.stop()
-
-
-st.subheader(f"{staff} さんの交通費（個別）")
-st.caption("「距離(km)」の数字を直接タップして書き換えられます。書き換えたら下の「保存する」を押してください。")
+mode = st.radio("編集する種類を選んでください", ["個別", "複数"], horizontal=True)
 
 
 def to_num(v):
@@ -76,116 +64,212 @@ def to_num(v):
         return None
 
 
-if presets:
-    df = pd.DataFrame([
-        {"利用者": p['name'], "距離(km)": to_num(p['km'])}
-        for p in presets
-    ])
-    df["距離(km)"] = df["距離(km)"].astype("Float64")
+# ============================================================
+# 個別モード
+# ============================================================
+if mode == "個別":
+    tab_name = staff_to_tab(staff, "個別")
 
-    editor_key = f"editor_{tab_name}"
+    try:
+        presets = sc.read_individual_presets(spreadsheet, tab_name)
+    except Exception as e:
+        st.error(f"データの読み込みに失敗しました: {e}")
+        st.stop()
 
-    edited_df = st.data_editor(
-        df,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "利用者": st.column_config.TextColumn("利用者", disabled=True),
-            "距離(km)": st.column_config.NumberColumn(
-                "距離(km)", min_value=0, max_value=999, step=0.5, format="%.1f",
-            ),
-        },
-        key=editor_key,
-    )
+    st.subheader(f"{staff} さんの交通費（個別）")
+    st.caption("「距離(km)」の数字を直接タップして書き換えられます。書き換えたら下の「保存する」を押してください。")
 
-    st.write("")
-    if st.button("💾 保存する", type="primary", width="stretch"):
-        updates = []
-        for _, row in edited_df.iterrows():
-            name = row["利用者"]
-            km_val = row["距離(km)"]
-            if km_val is None or pd.isna(km_val):
-                km_str = ""
-            else:
-                km_val = float(km_val)
-                km_str = str(int(km_val)) if km_val == int(km_val) else str(km_val)
-            updates.append({"name": name, "km": km_str})
-        try:
-            with st.spinner("保存中..."):
-                count = sc.update_individual_km(spreadsheet, tab_name, updates)
-            st.success(f"✅ 保存しました（{count}件）")
-            st.caption("変更は出勤簿作成ツールにも反映されます。")
-        except Exception as e:
-            st.error(f"保存に失敗しました: {e}")
-else:
-    st.warning("プリセットがまだ登録されていません。下から新規追加できます。")
+    if presets:
+        df = pd.DataFrame([
+            {"利用者": p['name'], "距離(km)": to_num(p['km'])}
+            for p in presets
+        ])
+        df["距離(km)"] = df["距離(km)"].astype("Float64")
 
+        editor_key = f"editor_{tab_name}"
+        edited_df = st.data_editor(
+            df,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "利用者": st.column_config.TextColumn("利用者", disabled=True),
+                "距離(km)": st.column_config.NumberColumn(
+                    "距離(km)", min_value=0, max_value=999, step=0.5, format="%.1f",
+                ),
+            },
+            key=editor_key,
+        )
 
-# ===== 新規利用者の追加 =====
-st.divider()
-st.subheader("➕ 新しい利用者を追加")
-st.caption("プリセットに無い利用者を追加します。利用者名と距離(km)を入れて「追加する」を押してください。")
-
-with st.form(f"add_form_{tab_name}", clear_on_submit=True):
-    new_name = st.text_input("利用者名", placeholder="例: 山田")
-    new_km = st.number_input("距離(km)", min_value=0.0, max_value=999.0, step=0.5, value=0.0)
-    new_note = st.text_input("備考（任意）", placeholder="")
-    submitted = st.form_submit_button("この利用者を追加する", type="primary")
-
-if submitted:
-    name_clean = new_name.strip()
-    if not name_clean:
-        st.error("利用者名を入力してください。")
-    else:
-        km_str = str(int(new_km)) if new_km == int(new_km) else str(new_km)
-        existing_names = [p['name'] for p in presets]
-        overlaps = sc.check_surname_overlap(name_clean, existing_names)
-        try:
-            ok, msg = sc.add_individual_preset(
-                spreadsheet, tab_name, name_clean, km_str, new_note.strip()
-            )
-            if ok:
-                st.success(f"✅ {msg}")
-                if overlaps:
-                    st.warning(
-                        f"⚠️ 「{name_clean}」は既存の利用者（{', '.join(overlaps)}）と"
-                        f"名前の先頭が重なります。出勤簿ツールのマッチングに"
-                        f"影響する場合があるので、管理者に確認してください。"
-                    )
-                st.caption("上の表を最新にするには、ページを再読み込みしてください。")
-            else:
-                st.error(f"追加できませんでした: {msg}")
-        except Exception as e:
-            st.error(f"追加に失敗しました: {e}")
-
-
-# ===== 利用者の削除 =====
-st.divider()
-st.subheader("🗑️ 利用者を削除")
-st.caption("登録されている利用者を削除します。削除すると元に戻せないので、よく確認してください。")
-
-if presets:
-    name_options = [p['name'] for p in presets]
-    with st.form(f"delete_form_{tab_name}"):
-        del_name = st.selectbox("削除する利用者を選んでください", name_options)
-        del_confirm = st.checkbox("上記の利用者を削除することを確認しました")
-        del_submitted = st.form_submit_button("削除する", type="secondary")
-
-    if del_submitted:
-        if not del_confirm:
-            st.error("削除するには、確認のチェックを入れてください。")
-        else:
+        st.write("")
+        if st.button("💾 保存する", type="primary", width="stretch"):
+            updates = []
+            for _, row in edited_df.iterrows():
+                name = row["利用者"]
+                km_val = row["距離(km)"]
+                if km_val is None or pd.isna(km_val):
+                    km_str = ""
+                else:
+                    km_val = float(km_val)
+                    km_str = str(int(km_val)) if km_val == int(km_val) else str(km_val)
+                updates.append({"name": name, "km": km_str})
             try:
-                ok, msg = sc.delete_individual_preset(spreadsheet, tab_name, del_name)
+                with st.spinner("保存中..."):
+                    count = sc.update_individual_km(spreadsheet, tab_name, updates)
+                st.success(f"✅ 保存しました（{count}件）")
+                st.caption("変更は出勤簿作成ツールにも反映されます。")
+            except Exception as e:
+                st.error(f"保存に失敗しました: {e}")
+    else:
+        st.warning("プリセットがまだ登録されていません。下から新規追加できます。")
+
+    # 新規利用者の追加
+    st.divider()
+    st.subheader("➕ 新しい利用者を追加")
+    st.caption("プリセットに無い利用者を追加します。利用者名と距離(km)を入れて「追加する」を押してください。")
+
+    with st.form(f"add_form_{tab_name}", clear_on_submit=True):
+        new_name = st.text_input("利用者名", placeholder="例: 山田")
+        new_km = st.number_input("距離(km)", min_value=0.0, max_value=999.0, step=0.5, value=0.0)
+        new_note = st.text_input("備考（任意）", placeholder="")
+        submitted = st.form_submit_button("この利用者を追加する", type="primary")
+
+    if submitted:
+        name_clean = new_name.strip()
+        if not name_clean:
+            st.error("利用者名を入力してください。")
+        else:
+            km_str = str(int(new_km)) if new_km == int(new_km) else str(new_km)
+            existing_names = [p['name'] for p in presets]
+            overlaps = sc.check_surname_overlap(name_clean, existing_names)
+            try:
+                ok, msg = sc.add_individual_preset(
+                    spreadsheet, tab_name, name_clean, km_str, new_note.strip()
+                )
                 if ok:
                     st.success(f"✅ {msg}")
+                    if overlaps:
+                        st.warning(
+                            f"⚠️ 「{name_clean}」は既存の利用者（{', '.join(overlaps)}）と"
+                            f"名前の先頭が重なります。出勤簿ツールのマッチングに"
+                            f"影響する場合があるので、管理者に確認してください。"
+                        )
                     st.caption("上の表を最新にするには、ページを再読み込みしてください。")
                 else:
-                    st.error(f"削除できませんでした: {msg}")
+                    st.error(f"追加できませんでした: {msg}")
             except Exception as e:
-                st.error(f"削除に失敗しました: {e}")
+                st.error(f"追加に失敗しました: {e}")
+
+    # 利用者の削除
+    st.divider()
+    st.subheader("🗑️ 利用者を削除")
+    st.caption("登録されている利用者を削除します。削除すると元に戻せないので、よく確認してください。")
+
+    if presets:
+        name_options = [p['name'] for p in presets]
+        with st.form(f"delete_form_{tab_name}"):
+            del_name = st.selectbox("削除する利用者を選んでください", name_options)
+            del_confirm = st.checkbox("上記の利用者を削除することを確認しました")
+            del_submitted = st.form_submit_button("削除する", type="secondary")
+
+        if del_submitted:
+            if not del_confirm:
+                st.error("削除するには、確認のチェックを入れてください。")
+            else:
+                try:
+                    ok, msg = sc.delete_individual_preset(spreadsheet, tab_name, del_name)
+                    if ok:
+                        st.success(f"✅ {msg}")
+                        st.caption("上の表を最新にするには、ページを再読み込みしてください。")
+                    else:
+                        st.error(f"削除できませんでした: {msg}")
+                except Exception as e:
+                    st.error(f"削除に失敗しました: {e}")
+    else:
+        st.caption("（削除できる利用者がいません）")
+
+
+# ============================================================
+# 複数モード（案A: 全列表示・合計距離kmのみ編集）
+# ============================================================
 else:
-    st.caption("（削除できる利用者がいません）")
+    tab_name = staff_to_tab(staff, "複数")
+
+    try:
+        data = sc.read_multiple_presets(spreadsheet, tab_name)
+    except Exception as e:
+        st.error(f"データの読み込みに失敗しました: {e}")
+        st.stop()
+
+    header = data['header']
+    rows = data['rows']
+
+    st.subheader(f"{staff} さんの交通費（複数）")
+    st.caption("「合計距離km」の数字だけ編集できます。行き先や時刻は編集できません（横にスクロールして確認できます）。書き換えたら下の「保存する」を押してください。")
+
+    if rows:
+        # 15列をDataFrameに（行番号も保持）
+        col_names = header if len(header) == 15 else [
+            "No", "行き先A", "開始A", "終了A", "行き先B", "開始B", "終了B",
+            "行き先C", "開始C", "終了C", "行き先D", "開始D", "終了D",
+            "合計距離km", "備考",
+        ]
+        km_col_name = col_names[13]  # 合計距離km の列名
+
+        table_rows = []
+        row_num_list = []
+        for r in rows:
+            row_num_list.append(r['row_num'])
+            d = {}
+            for i, cn in enumerate(col_names):
+                d[cn] = r['cells'][i]
+            # 合計距離kmだけ数値化
+            d[km_col_name] = to_num(d[km_col_name])
+            table_rows.append(d)
+
+        df = pd.DataFrame(table_rows, columns=col_names)
+        df[km_col_name] = df[km_col_name].astype("Float64")
+
+        # 合計距離km以外を全部 disabled に
+        column_config = {}
+        for cn in col_names:
+            if cn == km_col_name:
+                column_config[cn] = st.column_config.NumberColumn(
+                    km_col_name, min_value=0, max_value=999, step=0.5, format="%.1f",
+                )
+            else:
+                column_config[cn] = st.column_config.TextColumn(cn, disabled=True)
+
+        editor_key = f"editor_{tab_name}"
+        edited_df = st.data_editor(
+            df,
+            hide_index=True,
+            width="stretch",
+            column_config=column_config,
+            key=editor_key,
+        )
+
+        st.write("")
+        if st.button("💾 保存する", type="primary", width="stretch"):
+            updates = []
+            for pos, (_, row) in enumerate(edited_df.iterrows()):
+                km_val = row[km_col_name]
+                if km_val is None or pd.isna(km_val):
+                    km_str = ""
+                else:
+                    km_val = float(km_val)
+                    km_str = str(int(km_val)) if km_val == int(km_val) else str(km_val)
+                updates.append({"row_num": row_num_list[pos], "km": km_str})
+            try:
+                with st.spinner("保存中..."):
+                    count = sc.update_multiple_km(spreadsheet, tab_name, updates)
+                st.success(f"✅ 保存しました（{count}件）")
+                st.caption("変更は出勤簿作成ツールにも反映されます。")
+            except Exception as e:
+                st.error(f"保存に失敗しました: {e}")
+    else:
+        st.warning("複数プリセットがまだ登録されていません。")
+
+    st.info("💡 新しい複数パターンの追加は、スプレッドシートに直接入力してください（管理者にご確認ください）。")
 
 
 # ===== フッター =====
